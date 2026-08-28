@@ -1,0 +1,6 @@
+{
+  "support": {
+    "central_longitudinal_range": [0.2, 0.8],
+    "description": "Length includes joints; middle and short axes use only the flat central bar."
+  }
+}
