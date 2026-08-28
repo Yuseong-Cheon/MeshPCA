@@ -1,4 +1,13 @@
-numpy>=1.26
+numpy==1.26.4
 opencv-python>=4.8
-open3d>=0.18
+open3d==0.19.0
 pycolmap>=3.10
+scipy==1.15.3
+scikit-learn==1.7.2
+shapely==2.1.2
+trimesh==5.0.0
+coacd==1.0.13
+vedo==2026.6.1
+matplotlib==3.10.9
+pymeshlab==2025.7.post1
+vtk==9.7.0

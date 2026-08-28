@@ -1,0 +1,17 @@
+{
+  "root": "base",
+  "parents": {
+    "moving_link": "base"
+  },
+  "seeds": {
+    "base": [],
+    "moving_link": []
+  },
+  "seed_source": "RORA_HITL_high_margin_core_hull",
+  "input_geometry_semantics": "thickness_corrected_material_surface",
+  "measured_thickness_mm": {
+    "base": null,
+    "moving_link": null
+  },
+  "joint_housing_semantics_confirmed": false
+}

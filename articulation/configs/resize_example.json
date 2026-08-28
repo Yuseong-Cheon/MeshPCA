@@ -1,0 +1,27 @@
+{
+  "root": "base",
+  "parents": {
+    "moving_link": "base"
+  },
+  "seeds": {
+    "base": [],
+    "moving_link": []
+  },
+  "input_geometry_semantics": "disconnected_watertight_material_surfaces",
+  "measured_thickness_mm": {
+    "base": 12.0,
+    "moving_link": 5.0
+  },
+  "dimension_constraints": {
+    "A": {
+      "measurement_source": {
+        "thickness": "replace_with_actual_measurement"
+      },
+      "thickness_mm": {
+        "base": 12.0,
+        "moving_link": 5.0
+      },
+      "parts": {}
+    }
+  }
+}

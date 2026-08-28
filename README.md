@@ -1,8 +1,21 @@
-# MeshPCA
+# MeshPCA + Articulated Mesh Pipeline
 
 MeshPCA measures the three principal dimensions of any number of separated mesh labels from the original RealSense RGB-D recording.
 
 The separated meshes provide only label masks and PCA-axis directions. Metric lengths are computed from the original aligned Depth frames. For every label and axis, MeshPCA selects one suitable COLMAP frame, searches the nearby raw DB3 frames, and reports the median of the best seven measurements.
+
+`articulation/` adds the upstream part split and joint approval pipeline, plus optional measured-dimension resize and URDF export. Its output naming already matches MeshPCA, so no adapter is required.
+
+```text
+watertight PLY
+  -> articulation/scripts/rora_prior_split_ply.py
+  -> <output>/metric_parts/*_metric_watertight.ply
+  -> meshpca.py --labels <output>/metric_parts
+  -> optional articulation/scripts/resize_articulated_parts.py
+  -> URDF asset
+```
+
+See [`articulation/README.md`](articulation/README.md) for part split and joint usage.
 
 ## Installation
 
