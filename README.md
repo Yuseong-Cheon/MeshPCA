@@ -2,7 +2,7 @@
 
 MeshPCA measures the three principal dimensions of any number of separated mesh labels from the original RealSense RGB-D recording.
 
-The separated meshes provide only label masks and PCA-axis directions. Metric lengths are computed from the original aligned Depth frames. For every label and axis, MeshPCA selects one suitable COLMAP frame, searches the nearby raw DB3 frames, and uses the single highest-quality Depth measurement.
+The separated meshes provide only label masks and PCA-axis directions. Metric lengths are computed from the original aligned Depth frames. For every label and axis, MeshPCA selects one suitable COLMAP frame, searches the nearby original DB3 frames, and uses the median of the three highest-quality Depth measurements.
 
 `articulation/` adds the upstream part split and joint approval pipeline, plus optional measured-dimension resize and URDF export. Its output naming already matches MeshPCA, so no adapter is required.
 
@@ -61,7 +61,7 @@ python meshpca.py \
   --output /tmp/meshpca_output
 ```
 
-The output contains JSON and CSV measurements, the selected RGB/Depth frame for each part axis, per-label review sheets, and a summary image. Each measurement records the selected frame's projected Depth coverage, mesh-Depth agreement, viewability, score, and the number of valid candidates.
+The output contains JSON and CSV measurements, `part_dimensions_raw_candidates.csv` with every valid nearby original DB3 measurement, one representative RGB/Depth frame per axis, per-label review sheets, and a summary image. The median is the reported dimension; the highest-scoring frame is used only for visualization and HITL review. Use `--frames-per-axis 3`, `5`, or `7` for an ablation while keeping an odd median sample count.
 
 ## Optional final HITL review
 

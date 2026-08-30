@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure N separated parts from the best original RGB-D frame per PCA axis."""
+"""Measure N separated parts from robust original RGB-D medians per PCA axis."""
 
 import argparse
 import csv
@@ -382,9 +382,14 @@ def draw_overlay(rgb, geometry_ids, geometry_id, row, label, axis_name):
     if pa and pb:
         cv2.arrowedLine(shown, pa, pb, (0, 0, 255), 4, cv2.LINE_AA, tipLength=.08)
         cv2.arrowedLine(shown, pb, pa, (0, 0, 255), 4, cv2.LINE_AA, tipLength=.08)
-    cv2.rectangle(shown, (10, 10), (690, 62), (255, 255, 255), -1)
-    cv2.putText(shown, f"{label} {axis_name}: {row['value_mm']:.1f} mm | {row['frame']}",
-                (22, 46), cv2.FONT_HERSHEY_SIMPLEX, .72, (0, 0, 200), 2, cv2.LINE_AA)
+    if "_reported_mm" in row:
+        caption = (f"{label} {axis_name}: median{row['_reported_count']} {row['_reported_mm']:.1f}"
+                   f" | raw {row['value_mm']:.1f} | {Path(row['frame']).stem}")
+    else:
+        caption = f"{label} {axis_name}: {row['value_mm']:.1f} mm | {row['frame']}"
+    cv2.rectangle(shown, (10, 10), (850, 62), (255, 255, 255), -1)
+    cv2.putText(shown, caption, (22, 46), cv2.FONT_HERSHEY_SIMPLEX,
+                .68, (0, 0, 200), 2, cv2.LINE_AA)
     return shown
 
 
@@ -404,6 +409,11 @@ def serializable_row(row):
 
 def best_measurement(rows):
     return max(rows, key=lambda row: row["score"], default=None)
+
+
+def top_measurements(rows, count):
+    return sorted(sorted(rows, key=lambda row: row["score"], reverse=True)[:count],
+                  key=lambda row: row["order"])
 
 
 def review_files(output):
@@ -490,6 +500,7 @@ def self_check():
              "mask_pixels": 100} for i in range(11)]
     assert choose_center(rows, 0)["order"] == 8
     assert best_measurement(rows)["order"] == 5
+    assert [row["order"] for row in top_measurements(rows, 3)] == [4, 5, 6]
     approved = review_decision("HITL_APPROVED", "test", [Path("summary.jpg")])
     rejected = review_decision("HITL_REJECTED", "test", [Path("part.jpg")])
     assert approved["status"] == "HITL_APPROVED" and approved["reviewed_files"] == ["summary.jpg"]
@@ -514,6 +525,8 @@ def main():
     parser.add_argument("--mesh-scale", type=float, required=required,
                         help="meters per unit in the mesh-generation COLMAP reconstruction")
     parser.add_argument("--rules", type=Path, help="optional per-label JSON rules")
+    parser.add_argument("--frames-per-axis", type=int, default=3,
+                        help="top original DB3 frames used for each median (default: 3)")
     parser.add_argument("--raw-radius", type=int, default=15)
     parser.add_argument("--review-final", action="store_true",
                         help="require a final human approve/reject decision")
@@ -526,8 +539,12 @@ def main():
         return 0
     if args.review_existing:
         return final_review(args.review_existing)
+    if args.frames_per_axis < 3 or args.frames_per_axis % 2 == 0:
+        parser.error("--frames-per-axis must be an odd number >= 3")
     if args.raw_radius < 0:
         parser.error("--raw-radius cannot be negative")
+    if 2 * args.raw_radius + 1 < args.frames_per_axis:
+        parser.error("--raw-radius window is smaller than --frames-per-axis")
     if args.mesh_scale <= 0:
         parser.error("--mesh-scale must be positive")
     if args.output.exists() and any(args.output.iterdir()):
@@ -604,13 +621,14 @@ def main():
     report = {
         "source_db3": str(args.db3),
         "units": "mm",
-        "method": "best COLMAP frame per label/axis, then the highest-quality original DB3 frame in its local temporal window",
+        "method": "best COLMAP frame per label/axis, then median of the top-scoring original DB3 frames in its local temporal window",
+        "original_db3_frames_per_axis": args.frames_per_axis,
         "labels": {},
         "alignment": {**align_report,
                       "benchmark_to_original_scale": float(align_scale),
                       "meters_per_original_colmap_unit": float(metric_per_original_unit)},
     }
-    csv_rows, summary_lines = [], []
+    csv_rows, candidate_rows, summary_lines = [], [], []
     raw = open_raw_rgbd(args.db3, next(iter(rgb_cameras.values())))
     radius = args.raw_radius
     for label in labels:
@@ -660,33 +678,46 @@ def main():
                         sync_dt_ms=raw_meta["sync_dt_ms"], camera=camera,
                         _rgb=rgb, _depth=depth, _geometry_ids=geometry)
                     candidates.append(measured)
-            selected = best_measurement(candidates)
-            if selected is None:
+            for rank, row in enumerate(
+                    sorted(candidates, key=lambda item: item["score"], reverse=True), 1):
+                candidate_rows.append((
+                    label, axis_name, row["frame"], row["order"], row["raw_offset"],
+                    row["value_mm"], row["score"], row["depth_coverage"],
+                    row["mesh_depth_agreement"], row["viewability"], row["ecc_score"], rank))
+            selected = top_measurements(candidates, args.frames_per_axis)
+            if len(selected) != args.frames_per_axis:
                 label_report[axis_name] = {
                     "status": "insufficient_raw_neighbours", "center_colmap_frame": center_frame,
-                    "valid_frames": 0}
-                summary_lines.append(f"{label} {axis_name}: FAILED (0 raw)")
+                    "valid_frames": len(selected)}
+                summary_lines.append(
+                    f"{label} {axis_name}: FAILED ({len(selected)}/{args.frames_per_axis} raw)")
                 continue
-            value = float(selected["value_mm"])
-            saved = serializable_row(selected)
+            values = np.asarray([row["value_mm"] for row in selected])
+            median = float(np.median(values))
+            mad = float(np.median(np.abs(values - median)))
+            representative = best_measurement(selected)
             label_report[axis_name] = {
-                "status": "ok", "value_mm": value,
+                "status": "ok", "median_mm": median, "mad_mm": mad,
                 "center_colmap_frame": center_frame,
-                "candidate_count": len(candidates), "frame": saved,
+                "candidate_count": len(candidates),
+                "representative_frame": representative["frame"],
+                "frames": [serializable_row(row) for row in selected],
             }
-            csv_rows.append((label, axis_name, value, selected["frame"], selected["score"],
-                             selected["depth_coverage"], selected["mesh_depth_agreement"],
-                             selected["viewability"], len(candidates)))
+            representative["_reported_mm"] = median
+            representative["_reported_count"] = len(selected)
+            csv_rows.append((label, axis_name, median, mad, representative["frame"],
+                             " ".join(row["frame"] for row in selected)))
             summary_lines.append(
-                f"{label:12s} {axis_name:6s}: {value:7.2f} mm  score {selected['score']:.2f}")
-            frame = selected["frame"]
+                f"{label:12s} {axis_name:6s}: {median:7.2f} mm  MAD {mad:5.2f}")
+            frame = representative["frame"]
             overlay = draw_overlay(
-                selected["_rgb"], selected["_geometry_ids"], 0, selected, label, axis_name)
+                representative["_rgb"], representative["_geometry_ids"], 0,
+                representative, label, axis_name)
             out = args.output / f"{label}_{axis_name}_{Path(frame).stem}_rgb.jpg"
             cv2.imwrite(str(out), overlay)
             depth_overlay = draw_overlay(
-                depth_view(selected["_depth"]), selected["_geometry_ids"], 0,
-                selected, label, axis_name)
+                depth_view(representative["_depth"]), representative["_geometry_ids"], 0,
+                representative, label, axis_name)
             cv2.imwrite(str(args.output / f"{label}_{axis_name}_{Path(frame).stem}_depth.jpg"),
                         depth_overlay)
             panels.append(np.hstack((cv2.resize(overlay, (318, 178)),
@@ -700,11 +731,17 @@ def main():
         json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     with (args.output / "part_dimensions_multiview_pca.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(("label", "axis", "value_mm", "frame", "score", "depth_coverage",
-                         "mesh_depth_agreement", "viewability", "candidate_count"))
+        writer.writerow(("label", "axis", "median_mm", "mad_mm", "representative_frame",
+                         "original_db3_frames"))
         writer.writerows(csv_rows)
+    with (args.output / "part_dimensions_raw_candidates.csv").open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("label", "axis", "frame", "source_index", "raw_offset", "value_mm",
+                         "score", "depth_coverage", "mesh_depth_agreement", "viewability",
+                         "ecc_score", "quality_rank"))
+        writer.writerows(candidate_rows)
     summary = np.full((max(260, 55 + 34 * len(summary_lines)), 950, 3), 255, np.uint8)
-    cv2.putText(summary, "BEST ORIGINAL DEPTH FRAME PER PCA AXIS", (24, 38),
+    cv2.putText(summary, "ORIGINAL DEPTH MULTI-FRAME MEDIAN PER PCA AXIS", (24, 38),
                 cv2.FONT_HERSHEY_SIMPLEX, .85, (0, 0, 0), 2, cv2.LINE_AA)
     for index, line in enumerate(summary_lines):
         cv2.putText(summary, line, (24, 78 + 34 * index), cv2.FONT_HERSHEY_SIMPLEX,
