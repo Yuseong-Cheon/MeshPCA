@@ -2,7 +2,7 @@
 
 MeshPCA measures the three principal dimensions of any number of separated mesh labels from the original RealSense RGB-D recording.
 
-The separated meshes provide only label masks and PCA-axis directions. Metric lengths are computed from the original aligned Depth frames. For every label and axis, MeshPCA selects one suitable COLMAP frame, searches the nearby raw DB3 frames, and reports the median of the best seven measurements.
+The separated meshes provide only label masks and PCA-axis directions. Metric lengths are computed from the original aligned Depth frames. For every label and axis, MeshPCA selects one suitable COLMAP frame, searches the nearby raw DB3 frames, and uses the single highest-quality Depth measurement.
 
 `articulation/` adds the upstream part split and joint approval pipeline, plus optional measured-dimension resize and URDF export. Its output naming already matches MeshPCA, so no adapter is required.
 
@@ -61,7 +61,28 @@ python meshpca.py \
   --output /tmp/meshpca_output
 ```
 
-The output contains JSON and CSV measurements, RGB/Depth overlays for the seven selected raw frames per axis, per-label contact sheets, and a summary image.
+The output contains JSON and CSV measurements, the selected RGB/Depth frame for each part axis, per-label review sheets, and a summary image. Each measurement records the selected frame's projected Depth coverage, mesh-Depth agreement, viewability, score, and the number of valid candidates.
+
+## Optional final HITL review
+
+Add `--review-final` to keep frame selection and measurement automatic while requiring a human to approve or reject the final result:
+
+```bash
+python meshpca.py \
+  --db3 /path/to/recording.db3 \
+  --project /path/to/rgbd_project \
+  --mesh-colmap /path/to/mesh_colmap_dataset \
+  --mesh-scale 0.17473159013427114 \
+  --labels /path/to/separated_meshes \
+  --output /tmp/meshpca_output \
+  --review-final
+```
+
+Use `N/P` to browse part sheets, `A` to approve, and `R` to reject. Rejection preserves all measurements and records `HITL_REJECTED` in `final_review.json`; it does not select another frame. A saved result can be reviewed again without recomputing Depth:
+
+```bash
+python meshpca.py --review-existing /tmp/meshpca_output
+```
 
 ## Per-label rules
 

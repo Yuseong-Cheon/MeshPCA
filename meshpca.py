@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Measure N separated parts from original RGB-D using per-axis 7-frame PCA medians."""
+"""Measure N separated parts from the best original RGB-D frame per PCA axis."""
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -400,11 +402,98 @@ def serializable_row(row):
             if key not in {"axis_camera", "center_camera", "camera", "_rgb", "_depth", "_geometry_ids"}}
 
 
+def best_measurement(rows):
+    return max(rows, key=lambda row: row["score"], default=None)
+
+
+def review_files(output):
+    summary = output / "part_dimensions_summary.jpg"
+    pages = [summary, *sorted(output.glob("*_selected_per_axis.jpg"))]
+    missing = [str(path) for path in pages if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"missing review images: {missing}")
+    return pages
+
+
+def review_page(path, index, count):
+    image = cv2.imread(str(path))
+    if image is None:
+        raise RuntimeError(f"failed to read review image: {path}")
+    maximum = np.array((1450, 780), float)
+    scale = min(1.0, *(maximum / np.array((image.shape[1], image.shape[0]))))
+    shown = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    footer = np.full((72, shown.shape[1], 3), 245, np.uint8)
+    cv2.putText(footer, f"{index + 1}/{count} {path.name}", (15, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, .58, (30, 30, 30), 1, cv2.LINE_AA)
+    cv2.putText(footer, "N/P: browse   A: APPROVE   R: REJECT   Esc/Q: pending", (15, 56),
+                cv2.FONT_HERSHEY_SIMPLEX, .58, (0, 0, 180), 2, cv2.LINE_AA)
+    return np.vstack((shown, footer))
+
+
+def review_decision(status, source, pages):
+    return {
+        "status": status,
+        "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "decision_source": source,
+        "reviewed_files": [path.name for path in pages],
+        "reason": ({"HITL_APPROVED": "human_approved_final_measurement",
+                    "HITL_REJECTED": "human_rejected_final_measurement"}
+                   .get(status, "human_approval_not_recorded")),
+    }
+
+
+def final_review(output):
+    output = output.resolve()
+    report_path = output / "part_dimensions_multiview_pca.json"
+    if not report_path.is_file():
+        raise FileNotFoundError(f"missing measurement report: {report_path}")
+    pages = review_files(output)
+    status, source = "HITL_PENDING", "noninteractive"
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        source, index = "opencv_gui", 0
+        cv2.namedWindow("MeshPCA final review", cv2.WINDOW_NORMAL)
+        while True:
+            cv2.imshow("MeshPCA final review", review_page(pages[index], index, len(pages)))
+            key = cv2.waitKey(0) & 0xFF
+            if key in (ord("n"), ord("N"), 83):
+                index = (index + 1) % len(pages)
+            elif key in (ord("p"), ord("P"), 81):
+                index = (index - 1) % len(pages)
+            elif key in (ord("a"), ord("A")):
+                status = "HITL_APPROVED"
+                break
+            elif key in (ord("r"), ord("R")):
+                status = "HITL_REJECTED"
+                break
+            elif key in (27, ord("q"), ord("Q")):
+                break
+        cv2.destroyWindow("MeshPCA final review")
+    elif sys.stdin.isatty():
+        source = "terminal"
+        print("Review these files before deciding:")
+        print("\n".join(f"  {path}" for path in pages))
+        answer = input("Approve [A], reject [R], leave pending [Enter]: ").strip().lower()
+        status = {"a": "HITL_APPROVED", "r": "HITL_REJECTED"}.get(answer[:1], status)
+    decision = review_decision(status, source, pages)
+    report = json.loads(report_path.read_text())
+    report["final_review"] = decision
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    (output / "final_review.json").write_text(
+        json.dumps(decision, ensure_ascii=False, indent=2) + "\n")
+    print(json.dumps(decision, ensure_ascii=False, indent=2))
+    return 0 if status == "HITL_APPROVED" else 2
+
+
 def self_check():
     rows = [{"frame": f"f{i}", "order": i, "score": 10 - abs(i - 5),
              "viewability": .9, "value_mm": float(i), "border_px": 10,
              "mask_pixels": 100} for i in range(11)]
     assert choose_center(rows, 0)["order"] == 8
+    assert best_measurement(rows)["order"] == 5
+    approved = review_decision("HITL_APPROVED", "test", [Path("summary.jpg")])
+    rejected = review_decision("HITL_REJECTED", "test", [Path("part.jpg")])
+    assert approved["status"] == "HITL_APPROVED" and approved["reviewed_files"] == ["summary.jpg"]
+    assert rejected["reason"] == "human_rejected_final_measurement"
     x = np.array(((0, 0, 0), (1, 0, 0), (0, 1, 0)), float)
     scale, rotation, translation = fit_similarity(x, 2 * x + 3)
     assert np.isclose(scale, 2) and np.allclose(rotation, np.eye(3)) and np.allclose(translation, 3)
@@ -413,7 +502,7 @@ def self_check():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    required = "--self-check" not in sys.argv
+    required = not ({"--self-check", "--review-existing"} & set(sys.argv))
     parser.add_argument("--project", type=Path, required=required,
                         help="project containing selected RGB, aligned Depth, SAM masks, and COLMAP model")
     parser.add_argument("--mesh-colmap", type=Path, required=required,
@@ -425,17 +514,20 @@ def main():
     parser.add_argument("--mesh-scale", type=float, required=required,
                         help="meters per unit in the mesh-generation COLMAP reconstruction")
     parser.add_argument("--rules", type=Path, help="optional per-label JSON rules")
-    parser.add_argument("--frames-per-axis", type=int, default=7)
     parser.add_argument("--raw-radius", type=int, default=15)
+    parser.add_argument("--review-final", action="store_true",
+                        help="require a final human approve/reject decision")
+    parser.add_argument("--review-existing", type=Path,
+                        help="review an existing output without recomputing measurements")
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
     if args.self_check:
         self_check()
-        return
-    if args.frames_per_axis < 3 or args.frames_per_axis % 2 == 0:
-        parser.error("--frames-per-axis must be an odd number >= 3")
-    if 2 * args.raw_radius + 1 < args.frames_per_axis:
-        parser.error("--raw-radius window is smaller than --frames-per-axis")
+        return 0
+    if args.review_existing:
+        return final_review(args.review_existing)
+    if args.raw_radius < 0:
+        parser.error("--raw-radius cannot be negative")
     if args.mesh_scale <= 0:
         parser.error("--mesh-scale must be positive")
     if args.output.exists() and any(args.output.iterdir()):
@@ -512,8 +604,7 @@ def main():
     report = {
         "source_db3": str(args.db3),
         "units": "mm",
-        "method": "best COLMAP frame per label/axis, then median of the best 7 original DB3 frames in its local temporal window",
-        "frames_per_axis": args.frames_per_axis,
+        "method": "best COLMAP frame per label/axis, then the highest-quality original DB3 frame in its local temporal window",
         "labels": {},
         "alignment": {**align_report,
                       "benchmark_to_original_scale": float(align_scale),
@@ -541,7 +632,7 @@ def main():
             center_mask = (center_geometry == label_to_geometry[label]).astype(np.uint8)
             center_t = np.where(np.isfinite(center_t_hit), center_t_hit, 0).astype(np.float32)
             center_source = int(source_id(center_frame))
-            selected = []
+            candidates = []
             raw_start = max(0, center_source - radius)
             raw_stop = min(len(raw["color_rows"]), center_source + radius + 1)
             for raw_index in range(raw_start, raw_stop):
@@ -568,58 +659,60 @@ def main():
                         center_colmap_frame=center_frame, ecc_score=ecc_score,
                         sync_dt_ms=raw_meta["sync_dt_ms"], camera=camera,
                         _rgb=rgb, _depth=depth, _geometry_ids=geometry)
-                    selected.append(measured)
-            selected = sorted(sorted(selected, key=lambda row: row["score"], reverse=True)
-                              [:args.frames_per_axis], key=lambda row: row["order"])
-            if len(selected) != args.frames_per_axis:
+                    candidates.append(measured)
+            selected = best_measurement(candidates)
+            if selected is None:
                 label_report[axis_name] = {
                     "status": "insufficient_raw_neighbours", "center_colmap_frame": center_frame,
-                    "valid_frames": len(selected)}
-                summary_lines.append(f"{label} {axis_name}: FAILED ({len(selected)}/7 raw)")
+                    "valid_frames": 0}
+                summary_lines.append(f"{label} {axis_name}: FAILED (0 raw)")
                 continue
-            values = np.asarray([row["value_mm"] for row in selected])
-            median = float(np.median(values))
-            mad = float(np.median(np.abs(values - median)))
+            value = float(selected["value_mm"])
+            saved = serializable_row(selected)
             label_report[axis_name] = {
-                "status": "ok", "median_mm": median, "mad_mm": mad,
+                "status": "ok", "value_mm": value,
                 "center_colmap_frame": center_frame,
-                "frames": [serializable_row(row) for row in selected],
+                "candidate_count": len(candidates), "frame": saved,
             }
-            csv_rows.append((label, axis_name, median, mad,
-                             " ".join(row["frame"] for row in selected)))
-            summary_lines.append(f"{label:12s} {axis_name:6s}: {median:7.2f} mm  MAD {mad:5.2f}")
-            axis_panels = []
-            for row in selected:
-                frame = row["frame"]
-                overlay = draw_overlay(row["_rgb"], row["_geometry_ids"], 0, row, label, axis_name)
-                out = args.output / f"{label}_{axis_name}_{Path(frame).stem}_rgb.jpg"
-                cv2.imwrite(str(out), overlay)
-                depth_overlay = draw_overlay(
-                    depth_view(row["_depth"]), row["_geometry_ids"], 0, row, label, axis_name)
-                cv2.imwrite(str(args.output / f"{label}_{axis_name}_{Path(frame).stem}_depth.jpg"),
-                            depth_overlay)
-                axis_panels.append(cv2.resize(overlay, (318, 178)))
-            panels.append(np.hstack(axis_panels))
+            csv_rows.append((label, axis_name, value, selected["frame"], selected["score"],
+                             selected["depth_coverage"], selected["mesh_depth_agreement"],
+                             selected["viewability"], len(candidates)))
+            summary_lines.append(
+                f"{label:12s} {axis_name:6s}: {value:7.2f} mm  score {selected['score']:.2f}")
+            frame = selected["frame"]
+            overlay = draw_overlay(
+                selected["_rgb"], selected["_geometry_ids"], 0, selected, label, axis_name)
+            out = args.output / f"{label}_{axis_name}_{Path(frame).stem}_rgb.jpg"
+            cv2.imwrite(str(out), overlay)
+            depth_overlay = draw_overlay(
+                depth_view(selected["_depth"]), selected["_geometry_ids"], 0,
+                selected, label, axis_name)
+            cv2.imwrite(str(args.output / f"{label}_{axis_name}_{Path(frame).stem}_depth.jpg"),
+                        depth_overlay)
+            panels.append(np.hstack((cv2.resize(overlay, (318, 178)),
+                                     cv2.resize(depth_overlay, (318, 178)))))
         report["labels"][label] = label_report
         if panels:
-            cv2.imwrite(str(args.output / f"{label}_selected_7_per_axis.jpg"), np.vstack(panels))
+            cv2.imwrite(str(args.output / f"{label}_selected_per_axis.jpg"), np.vstack(panels))
     raw["database"].close()
 
     (args.output / "part_dimensions_multiview_pca.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     with (args.output / "part_dimensions_multiview_pca.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(("label", "axis", "median_mm", "mad_mm", "frames"))
+        writer.writerow(("label", "axis", "value_mm", "frame", "score", "depth_coverage",
+                         "mesh_depth_agreement", "viewability", "candidate_count"))
         writer.writerows(csv_rows)
     summary = np.full((max(260, 55 + 34 * len(summary_lines)), 950, 3), 255, np.uint8)
-    cv2.putText(summary, "MULTI-VIEW ORIGINAL DEPTH PCA MEDIANS", (24, 38),
+    cv2.putText(summary, "BEST ORIGINAL DEPTH FRAME PER PCA AXIS", (24, 38),
                 cv2.FONT_HERSHEY_SIMPLEX, .85, (0, 0, 0), 2, cv2.LINE_AA)
     for index, line in enumerate(summary_lines):
         cv2.putText(summary, line, (24, 78 + 34 * index), cv2.FONT_HERSHEY_SIMPLEX,
                     .67, (0, 0, 180), 2, cv2.LINE_AA)
     cv2.imwrite(str(args.output / "part_dimensions_summary.jpg"), summary)
     print(json.dumps(report["labels"], ensure_ascii=False, indent=2))
+    return final_review(args.output) if args.review_final else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
