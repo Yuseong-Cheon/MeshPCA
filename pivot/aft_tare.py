@@ -56,6 +56,16 @@ class Aft200Sensor:
                 time.sleep(max(0.0, next_sample - time.monotonic()))
         return np.mean(samples, axis=0)
 
+    def stream(self):
+        """Keep one TCP connection open for a live monitor."""
+        next_sample = time.monotonic()
+        with socket.create_connection((self.host, 502), timeout=self.timeout_s) as sock:
+            sock.settimeout(self.timeout_s)
+            while True:
+                yield self._read_one(sock)
+                next_sample += 1.0 / self.hz
+                time.sleep(max(0.0, next_sample - time.monotonic()))
+
 
 class TareTable:
     """Empty-tool wrench indexed by gravity direction."""
