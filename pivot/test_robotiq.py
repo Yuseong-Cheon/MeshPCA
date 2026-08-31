@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from pivot.robotiq import Robotiq2F85, modbus_crc
+from pivot.rb5_ui import DisplayFilter
 
 
 class RobotiqTest(unittest.TestCase):
@@ -38,6 +39,11 @@ class RobotiqTest(unittest.TestCase):
         ))
         gripper.status = lambda: next(states)
         self.assertEqual(gripper.move(255)["object"], 3)
+
+    def test_display_filter(self):
+        display = DisplayFilter(alpha=0.5)
+        display.update([0, 0, 50, 0, 0, 0])
+        self.assertAlmostEqual(display.update([0, 0, 48, 0, 0, 0])[2], 49.0)
 
 
 if __name__ == "__main__":

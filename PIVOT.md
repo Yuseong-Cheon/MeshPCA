@@ -73,6 +73,16 @@ python pivot/rb5_ui.py \
   --tare calibration/aft_tare_current.json
 ```
 
-기존 AFT 원값·필터값·간이 질량과 Robotiq 제어 화면을 유지한다. `화면용 Fz 영점`은
-간이 질량 표시만 바꾸며 PIVOT의 3방향 6축 타어 파일은 수정하지 않는다. UI는 AFT와
-USB 포트를 자동 연결하고 Robotiq에 0.5초 상태 heartbeat를 보낸다.
+UI에는 AFT200의 실제 6축 원값과 이를 부드럽게 한 EMA 필터값만 표시한다. Fz를 g로
+환산한 원본 UI의 간이 질량과 화면 영점은 PIVOT에 쓰이지 않아 제거했다. UI의 타어
+표시는 파일의 3방향 데이터가 준비됐는지만 확인하며 화면 숫자에서는 빼지 않는다.
+
+실제 측정 단계에서는 같은 중력 방향의 빈 그리퍼 6축 값을 센서 6축 값에서 뺀다.
+
+```python
+tare = TareTable.load("calibration/aft_tare_current.json")
+object_wrench = tare.apply(g_hat, sensor_wrench)
+```
+
+UI는 AFT와 USB 포트를 자동 연결하고 Robotiq에 0.5초 상태 heartbeat를 보낸다. X11의
+Tk가 시스템 한글 폰트를 찾지 못하는 환경에서는 설치된 NanumGothic을 자동 등록한다.
