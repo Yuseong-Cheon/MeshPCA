@@ -24,6 +24,10 @@ camera-to-robot and table-plane calibration. See [`CALIBRATION.md`](CALIBRATION.
 RealSense D456 + EasyHeC/SAM feature, transform convention, and quality checks. Metric dimension
 measurement itself does not require this calibration.
 
+`pivot/` records the optional real-robot PIVOT integration one executable stage at a time.
+See [`PIVOT.md`](PIVOT.md). Generated calibration, tare, image, and measurement results are not
+tracked.
+
 ## Installation
 
 ```bash

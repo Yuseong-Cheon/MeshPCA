@@ -11,3 +11,5 @@ results/
 *.csv
 !foundationpose/assets/**/*.ply
 calibration/*.json
+pivot/calibration/*.json
+pivot/results/
