@@ -6,6 +6,8 @@ The separated meshes provide only label masks and PCA-axis directions. Metric le
 
 `articulation/` adds the upstream part split and joint approval pipeline, plus optional measured-dimension resize and URDF export. Its output naming already matches MeshPCA, so no adapter is required.
 
+`foundationpose/` is an optional object-axis angle feature for the included desk-lamp and laptop meshes. It converts per-part FoundationPose estimates into lamp joint angles or a laptop opening angle without changing the volume-estimation pipeline. See [`foundationpose/README.md`](foundationpose/README.md).
+
 ```text
 watertight PLY
   -> articulation/scripts/rora_prior_split_ply.py

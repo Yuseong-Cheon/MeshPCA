@@ -9,4 +9,5 @@ results/
 *.png
 *.jpg
 *.csv
+!foundationpose/assets/**/*.ply
 calibration/*.json
