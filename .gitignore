@@ -9,3 +9,4 @@ results/
 *.png
 *.jpg
 *.csv
+calibration/*.json

@@ -17,6 +17,11 @@ watertight PLY
 
 See [`articulation/README.md`](articulation/README.md) for part split and joint usage.
 
+When MeshPCA results must be expressed in an RB5 robot-base frame, first run the optional
+camera-to-robot and table-plane calibration. See [`CALIBRATION.md`](CALIBRATION.md) for the
+RealSense D456 + EasyHeC/SAM feature, transform convention, and quality checks. Metric dimension
+measurement itself does not require this calibration.
+
 ## Installation
 
 ```bash
